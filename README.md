@@ -70,9 +70,8 @@ BID_WALLS=[{"tokenMint":"TOKEN_MINT_ADDRESS","bidWallAddress":"BID_WALL_ADDRESS"
 
 To find active bid walls for tokens, you can:
 
-1. Check the [MetaDAO Governance UI](https://app.metadao.fi)
-2. Query the bid wall program directly using the futarchy SDK
-3. Use the Solana Explorer to find bid wall accounts
+1. Query the bid wall program directly using the futarchy SDK
+2. Use the Solana Explorer to find bid wall accounts
 
 ### Configuration Parameters Explained
 
@@ -90,21 +89,52 @@ To find active bid walls for tokens, you can:
 
 ## Usage
 
-### Dry Run Mode (Recommended for Testing)
+### Option 1: Web Frontend (Manual Swaps)
+
+A web frontend is included for users who want to manually swap tokens into bid walls using their own wallet.
+
+```bash
+# Install frontend dependencies
+bun run frontend:install
+
+# Start the API server (requires JUPITER_API_KEY and BID_WALLS in .env)
+bun run server
+
+# In another terminal, start the frontend
+bun run frontend
+```
+
+Then open http://localhost:3000 in your browser to:
+1. Connect your Phantom or Solflare wallet
+2. View bid wall information (NAV price, spot price, wall balance)
+3. Swap USDC into the bid wall
+
+**Frontend Environment Variables:**
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `RPC_URL` | Solana RPC endpoint | No (defaults to mainnet) |
+| `JUPITER_API_KEY` | Your Jupiter API key | **Yes** |
+| `BID_WALLS` | JSON array of bid walls | **Yes** |
+
+### Option 2: Automated Bot
+
+For automated arbitrage trading, use the bot which monitors prices and executes trades automatically.
+
+#### Dry Run Mode (Recommended for Testing)
 
 ```bash
 # Run in dry run mode to simulate without executing trades
 bun run dry-run
 ```
 
-### Production Mode
+#### Production Mode
 
 ```bash
 # Start the bot in production mode
 bun start
 ```
 
-### Development Mode
+#### Development Mode
 
 ```bash
 # Run with hot-reloading for development
@@ -185,12 +215,26 @@ The bot monitors when the Jupiter spot price falls below this NAV-based price, c
 
 ```
 src/
-├── index.ts          # Entry point
+├── index.ts          # Bot entry point
 ├── config.ts         # Configuration loading
 ├── types.ts          # TypeScript type definitions
 ├── bot.ts            # Main bot logic
 ├── jupiterClient.ts  # Jupiter API integration
-└── bidWallService.ts # Bid wall interactions
+├── bidWallService.ts # Bid wall interactions
+└── server.ts         # API server for frontend
+
+frontend/
+├── src/
+│   ├── main.tsx         # Frontend entry point
+│   ├── App.tsx          # Root component with wallet providers
+│   ├── index.css        # Tailwind CSS styles
+│   └── components/
+│       ├── Header.tsx        # Header with wallet connect
+│       ├── Background.tsx    # Animated background
+│       └── SwapInterface.tsx # Main swap UI
+├── package.json         # Frontend dependencies
+├── vite.config.ts       # Vite configuration
+└── tailwind.config.js   # Tailwind theme
 ```
 
 ## Risk Disclaimer

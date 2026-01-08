@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-meta-bg text-white antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    @apply bg-coral/30 text-white;
+  }
+}
+
+@layer components {
+  /* MetaDAO diagonal stripe pattern */
+  .meta-pattern {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 10px,
+      rgba(255, 255, 255, 0.015) 10px,
+      rgba(255, 255, 255, 0.015) 11px
+    );
+  }
+
+  .meta-card {
+    @apply bg-meta-card border border-meta-border rounded-xl;
+  }
+
+  .meta-divider {
+    @apply border-t border-meta-border;
+  }
+
+  .input-field {
+    @apply w-full bg-meta-bg border border-meta-border rounded-lg px-4 py-3
+           text-white placeholder:text-muted-dark 
+           focus:outline-none focus:border-coral/50 focus:ring-1 focus:ring-coral/20
+           transition-all duration-200;
+  }
+
+  .btn-primary {
+    @apply w-full py-4 rounded-lg font-semibold text-meta-bg
+           bg-coral hover:bg-coral-300
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-coral
+           transition-all duration-200;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 rounded-lg font-medium text-white
+           bg-meta-card border border-meta-border
+           hover:border-meta-border-light hover:bg-meta-border/30
+           transition-all duration-200;
+  }
+
+  .label {
+    @apply text-xs uppercase tracking-wider text-muted-dark;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold text-white;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs uppercase tracking-wider font-medium;
+  }
+
+  .status-active {
+    @apply bg-success/10 text-success;
+  }
+
+  .status-inactive {
+    @apply bg-coral/10 text-coral;
+  }
+}
+
+/* Wallet adapter button overrides - MetaDAO style */
+.wallet-adapter-button {
+  @apply !bg-coral !text-meta-bg !rounded-lg !font-semibold !font-sans
+         !transition-all !duration-200 hover:!bg-coral-300;
+}
+
+.wallet-adapter-button-trigger {
+  @apply !bg-coral !text-meta-bg;
+}
+
+.wallet-adapter-modal-wrapper {
+  @apply !bg-black/80 !backdrop-blur-sm;
+}
+
+.wallet-adapter-modal-container {
+  @apply !bg-meta-card !border !border-meta-border !rounded-xl;
+}
+
+.wallet-adapter-modal-title {
+  @apply !font-sans !text-white !font-semibold;
+}
+
+.wallet-adapter-modal-list li {
+  @apply !bg-meta-bg hover:!bg-meta-border/50 !rounded-lg !transition-colors !border !border-meta-border;
+}
+
+.wallet-adapter-modal-list li button {
+  @apply !bg-transparent !text-white;
+}
+
+.wallet-adapter-modal-list-more {
+  @apply !text-coral hover:!text-coral-300;
+}
+
+.wallet-adapter-dropdown {
+  @apply !bg-meta-card !border !border-meta-border !rounded-lg;
+}
+
+.wallet-adapter-dropdown-list li {
+  @apply !bg-transparent hover:!bg-meta-border/50;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-meta-border rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-meta-border-light;
+}
