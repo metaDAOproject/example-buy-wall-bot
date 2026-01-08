@@ -2,10 +2,10 @@ import {
   JupiterPriceResponse,
   JupiterOrderRequest,
   JupiterOrderResponse,
-  USDC_MINT,
+  JupiterExecuteResponse,
 } from "./types.ts";
 
-const JUPITER_PRICE_API = "https://api.jup.ag/price/v2";
+const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
 const JUPITER_ULTRA_API = "https://api.jup.ag/ultra/v1";
 
 export class JupiterClient {
@@ -16,15 +16,13 @@ export class JupiterClient {
   }
 
   /**
-   * Get the current price of a token in USDC
+   * Get the current price of a token in USD
    * @param tokenMint Token mint address
-   * @returns Price in USDC (human readable)
+   * @returns Price in USD (human readable)
    */
   async getTokenPrice(tokenMint: string): Promise<number> {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMint);
-    url.searchParams.set("vsToken", USDC_MINT);
-    url.searchParams.set("showExtraInfo", "true");
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -37,25 +35,24 @@ export class JupiterClient {
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterPriceResponse = await response.json();
-    const tokenData = data.data[tokenMint];
+    const data: JupiterPriceResponse = await response.json() as JupiterPriceResponse;
+    const tokenData = data[tokenMint];
 
     if (!tokenData) {
       throw new Error(`No price data found for token: ${tokenMint}`);
     }
 
-    return parseFloat(tokenData.price);
+    return tokenData.usdPrice;
   }
 
   /**
-   * Get prices for multiple tokens in USDC
+   * Get prices for multiple tokens in USD
    * @param tokenMints Array of token mint addresses
-   * @returns Map of token mint to price in USDC
+   * @returns Map of token mint to price in USD
    */
   async getTokenPrices(tokenMints: string[]): Promise<Map<string, number>> {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMints.join(","));
-    url.searchParams.set("vsToken", USDC_MINT);
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -68,12 +65,12 @@ export class JupiterClient {
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterPriceResponse = await response.json();
+    const data: JupiterPriceResponse = await response.json() as JupiterPriceResponse;
     const prices = new Map<string, number>();
 
-    for (const [mint, tokenData] of Object.entries(data.data)) {
-      if (tokenData && tokenData.price) {
-        prices.set(mint, parseFloat(tokenData.price));
+    for (const [mint, tokenData] of Object.entries(data)) {
+      if (tokenData && tokenData.usdPrice !== undefined) {
+        prices.set(mint, tokenData.usdPrice);
       }
     }
 
@@ -114,8 +111,10 @@ export class JupiterClient {
       throw new Error(`Jupiter Ultra API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterOrderResponse = await response.json();
-
+    const data: JupiterOrderResponse = await response.json() as JupiterOrderResponse;
+    if (!data) {
+      throw new Error(`No order data found`);
+    }
     if (data.simulationError) {
       throw new Error(`Jupiter simulation error: ${data.simulationError}`);
     }
@@ -152,10 +151,14 @@ export class JupiterClient {
       throw new Error(`Jupiter Execute API error: ${response.status} - ${errorText}`);
     }
 
-    const data = await response.json();
+    const data: JupiterExecuteResponse = await response.json() as JupiterExecuteResponse;
 
     if (data.status === "Failed") {
       throw new Error(`Jupiter execution failed: ${data.error || "Unknown error"}`);
+    }
+
+    if (!data.signature) {
+      throw new Error("Jupiter execution succeeded but no signature returned");
     }
 
     return data.signature;
@@ -197,7 +200,7 @@ export class JupiterClient {
       throw new Error(`Jupiter Quote API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterOrderResponse = await response.json();
+    const data: JupiterOrderResponse = await response.json() as JupiterOrderResponse;
 
     return {
       inAmount: data.inAmount,

@@ -24,3 +24,5 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# wallet
+wallet.json

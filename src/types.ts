@@ -38,42 +38,15 @@ export interface BotConfig {
 }
 
 /**
- * Jupiter Price API response
+ * Jupiter Price API v3 response
  */
 export interface JupiterPriceResponse {
-  data: {
-    [tokenMint: string]: {
-      id: string;
-      type: string;
-      price: string;
-      extraInfo?: {
-        lastSwappedPrice?: {
-          lastJupiterSellAt: number;
-          lastJupiterSellPrice: string;
-          lastJupiterBuyAt: number;
-          lastJupiterBuyPrice: string;
-        };
-        quotedPrice?: {
-          buyPrice: string;
-          buyAt: number;
-          sellPrice: string;
-          sellAt: number;
-        };
-        confidenceLevel?: string;
-        depth?: {
-          buyPriceImpactRatio: {
-            depth: { [amount: string]: number };
-            timestamp: number;
-          };
-          sellPriceImpactRatio: {
-            depth: { [amount: string]: number };
-            timestamp: number;
-          };
-        };
-      };
-    };
+  [tokenMint: string]: {
+    usdPrice: number;
+    blockId: number;
+    decimals: number;
+    priceChange24h: number;
   };
-  timeTaken: number;
 }
 
 /**
@@ -124,6 +97,27 @@ export interface JupiterOrderResponse {
 }
 
 /**
+ * Jupiter Ultra Execute response
+ */
+export interface JupiterExecuteResponse {
+  status: "Success" | "Failed";
+  code: number;
+  signature?: string;
+  slot?: string;
+  error?: string;
+  totalInputAmount?: string;
+  totalOutputAmount?: string;
+  inputAmountResult?: string;
+  outputAmountResult?: string;
+  swapEvents?: Array<{
+    inputMint: string;
+    inputAmount: string;
+    outputMint: string;
+    outputAmount: string;
+  }>;
+}
+
+/**
  * Bid wall account data structure
  */
 export interface BidWallAccount {
@@ -134,9 +128,8 @@ export interface BidWallAccount {
   daoTreasury: PublicKey;
   feeRecipient: PublicKey;
   nonce: BN;
-  initialQuoteAmount: BN;
+  quoteAmount: BN;
   initialAmmQuoteReserves: BN;
-  quoteAmountUsed: BN;
   feesCollected: BN;
   createdAt: BN;
   expiresAt: BN;

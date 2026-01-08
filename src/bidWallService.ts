@@ -25,9 +25,25 @@ export class BidWallService {
   /**
    * Fetch bid wall account data
    */
-  async fetchBidWall(bidWallAddress: PublicKey): Promise<BidWallAccount> {
+  async fetchBidWall(bidWallAddress: PublicKey): Promise<BidWallAccount | null> {
     const account = await this.bidWallClient.fetchBidWall(bidWallAddress);
-    return account as BidWallAccount;
+    if (!account) return null;
+    
+    return {
+      authority: account.authority,
+      creator: account.creator,
+      baseMint: account.baseMint,
+      quoteMint: new PublicKey(USDC_MINT),
+      daoTreasury: account.daoTreasury,
+      feeRecipient: account.feeRecipient,
+      nonce: account.nonce,
+      quoteAmount: account.quoteAmount,
+      initialAmmQuoteReserves: account.initialAmmQuoteReserves,
+      feesCollected: account.feesCollected,
+      createdAt: account.createdTimestamp,
+      expiresAt: account.createdTimestamp.add(new BN(account.durationSeconds)),
+    };
+    // return account as BidWallAccount;
   }
 
   /**
@@ -39,14 +55,16 @@ export class BidWallService {
   }> {
     try {
       const bidWall = await this.fetchBidWall(bidWallAddress);
+      if (!bidWall) return { active: false, reason: "Bid wall not found" };
+
       const now = Math.floor(Date.now() / 1000);
 
       if (bidWall.expiresAt.toNumber() <= now) {
         return { active: false, reason: "Bid wall has expired" };
       }
 
-      // Check if depleted (quoteAmountUsed >= initialQuoteAmount)
-      if (bidWall.quoteAmountUsed.gte(bidWall.initialQuoteAmount)) {
+      // Check if depleted (quoteAmount >= 0)
+      if (bidWall.quoteAmount.eq(new BN(0))) {
         return { active: false, reason: "Bid wall is depleted" };
       }
 
@@ -54,15 +72,6 @@ export class BidWallService {
     } catch (error) {
       return { active: false, reason: `Error fetching bid wall: ${error}` };
     }
-  }
-
-  /**
-   * Calculate the remaining capacity of a bid wall in USDC
-   */
-  async getRemainingCapacity(bidWallAddress: PublicKey): Promise<number> {
-    const bidWall = await this.fetchBidWall(bidWallAddress);
-    const remaining = bidWall.initialQuoteAmount.sub(bidWall.quoteAmountUsed);
-    return remaining.toNumber() / 1_000_000; // Convert to USDC
   }
 
   /**
@@ -83,6 +92,8 @@ export class BidWallService {
   }> {
     const bidWall = await this.fetchBidWall(bidWallAddress);
 
+    if (!bidWall) return { navPerToken: 0, priceAfterFee: 0, totalNav: 0, activeSupply: 0 };
+    
     // Get DAO treasury USDC balance
     const daoTreasuryUsdcAccount = getAssociatedTokenAddressSync(
       new PublicKey(USDC_MINT),
@@ -96,8 +107,7 @@ export class BidWallService {
     const daoTreasuryUsdc = parseFloat(daoTreasuryBalance.value.amount);
 
     // Get bid wall remaining balance
-    const bidWallRemainingUsdc = bidWall.initialQuoteAmount
-      .sub(bidWall.quoteAmountUsed)
+    const bidWallRemainingUsdc = bidWall.quoteAmount
       .toNumber();
 
     // AMM quote reserves (from bid wall initialization)

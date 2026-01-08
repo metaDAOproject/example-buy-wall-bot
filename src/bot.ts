@@ -1,10 +1,14 @@
 import {
   Connection,
   Keypair,
+  Transaction,
   VersionedTransaction,
   TransactionMessage,
+  TransactionInstruction,
   ComputeBudgetProgram,
+  AddressLookupTableAccount,
 } from "@solana/web3.js";
+import { AnchorProvider } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import bs58 from "bs58";
 import BN from "bn.js";
@@ -40,21 +44,33 @@ export class BidWallArbitrageBot {
     this.jupiterClient = new JupiterClient(config.jupiterApiKey);
 
     // Initialize BidWallClient with Anchor provider
-    // Note: This requires the futarchy package to be properly set up
-    const bidWallClient = BidWallClient.createClient({
-      connection: this.connection,
-      wallet: {
+    const provider = new AnchorProvider(
+      this.connection,
+      {
         publicKey: this.wallet.publicKey,
-        signTransaction: async <T extends VersionedTransaction>(tx: T): Promise<T> => {
-          tx.sign([this.wallet]);
+        signTransaction: async <T extends Transaction | VersionedTransaction>(tx: T): Promise<T> => {
+          if (tx instanceof VersionedTransaction) {
+            tx.sign([this.wallet]);
+          } else {
+            tx.partialSign(this.wallet);
+          }
           return tx;
         },
-        signAllTransactions: async <T extends VersionedTransaction>(txs: T[]): Promise<T[]> => {
-          txs.forEach((tx) => tx.sign([this.wallet]));
+        signAllTransactions: async <T extends Transaction | VersionedTransaction>(txs: T[]): Promise<T[]> => {
+          txs.forEach((tx) => {
+            if (tx instanceof VersionedTransaction) {
+              tx.sign([this.wallet]);
+            } else {
+              tx.partialSign(this.wallet);
+            }
+          });
           return txs;
         },
       },
-    });
+      { commitment: "confirmed" }
+    );
+
+    const bidWallClient = BidWallClient.createClient({ provider });
 
     this.bidWallService = new BidWallService(this.connection, bidWallClient);
   }
@@ -221,6 +237,15 @@ export class BidWallArbitrageBot {
         opportunity.bidWallConfig.bidWallAddress
       );
 
+      if (!bidWallAccount) {
+        return {
+          success: false,
+          inputAmount: this.config.tradeSizeUsdc.toString(),
+          outputAmount: "0",
+          error: "Bid wall account not found",
+        };
+      }
+
       // Create bid wall sell instruction
       const sellIx = await this.bidWallService.createSellTokensInstruction({
         amount: new BN(tokensReceived.toString()),
@@ -231,62 +256,52 @@ export class BidWallArbitrageBot {
         user: this.wallet.publicKey,
       });
 
-      // Unfortunately, Jupiter Ultra API returns a complete versioned transaction
-      // We need to combine it with the bid wall sell instruction
-      // This may require using the Jupiter V6 API instead for more control
-      // For now, we'll execute them as separate transactions with a check
+      // Decompile Jupiter transaction to extract raw instructions
+      console.log("   🔧 Decompiling Jupiter transaction...");
+      const { instructions: jupiterInstructions, addressLookupTableAccounts } =
+        await this.decompileTransaction(jupiterTx);
 
-      // Sign and send Jupiter transaction
-      console.log("   📤 Sending Jupiter swap transaction...");
-      jupiterTx.sign([this.wallet]);
-      const jupiterSignature = await this.jupiterClient.executeOrder(
-        Buffer.from(jupiterTx.serialize()).toString("base64"),
-        jupiterOrder.requestId
+      // Filter out Jupiter's compute budget instructions (we'll set our own)
+      const jupiterSwapInstructions = jupiterInstructions.filter(
+        (ix) => !ix.programId.equals(ComputeBudgetProgram.programId)
       );
-      console.log(`   ✅ Jupiter swap confirmed: ${jupiterSignature}`);
 
-      // Wait for confirmation
-      await this.connection.confirmTransaction(jupiterSignature, "confirmed");
-
-      // Verify we received the tokens
-      const tokenAccount = getAssociatedTokenAddressSync(
-        opportunity.bidWallConfig.tokenMint,
-        this.wallet.publicKey
-      );
-      const tokenBalance = await this.connection.getTokenAccountBalance(tokenAccount);
-      console.log(`   💰 Token balance: ${tokenBalance.value.uiAmount}`);
-
-      // Step 3: Sell into bid wall
-      console.log("   📤 Sending bid wall sell transaction...");
-
+      // Build combined atomic transaction
       const latestBlockhash = await this.connection.getLatestBlockhash();
-      const sellMessage = new TransactionMessage({
+
+      const combinedMessage = new TransactionMessage({
         payerKey: this.wallet.publicKey,
         recentBlockhash: latestBlockhash.blockhash,
         instructions: [
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+          // Compute budget for combined transaction
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
           ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+          // Jupiter swap instructions
+          ...jupiterSwapInstructions,
+          // Bid wall sell instruction
           sellIx,
         ],
-      }).compileToV0Message();
+      }).compileToV0Message(addressLookupTableAccounts);
 
-      const sellTx = new VersionedTransaction(sellMessage);
-      sellTx.sign([this.wallet]);
+      // Sign and send atomic transaction
+      console.log("   📤 Sending atomic transaction (swap + sell)...");
+      const atomicTx = new VersionedTransaction(combinedMessage);
+      atomicTx.sign([this.wallet]);
 
-      const sellSignature = await this.connection.sendTransaction(sellTx, {
+      const signature = await this.connection.sendTransaction(atomicTx, {
         skipPreflight: false,
       });
 
       await this.connection.confirmTransaction(
         {
-          signature: sellSignature,
+          signature,
           blockhash: latestBlockhash.blockhash,
           lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
         },
         "confirmed"
       );
 
-      console.log(`   ✅ Bid wall sell confirmed: ${sellSignature}`);
+      console.log(`   ✅ Atomic transaction confirmed: ${signature}`);
 
       // Check final USDC balance
       const usdcAccount = getAssociatedTokenAddressSync(
@@ -298,7 +313,7 @@ export class BidWallArbitrageBot {
 
       return {
         success: true,
-        signature: sellSignature,
+        signature,
         inputAmount: jupiterOrder.inAmount,
         outputAmount: jupiterOrder.outAmount,
         bidWallSellAmount: tokensReceived.toString(),
@@ -362,6 +377,48 @@ export class BidWallArbitrageBot {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Decompile a VersionedTransaction to extract raw instructions
+   * This is needed to combine Jupiter's transaction with our bid wall instruction
+   */
+  private async decompileTransaction(
+    tx: VersionedTransaction
+  ): Promise<{
+    instructions: TransactionInstruction[];
+    addressLookupTableAccounts: AddressLookupTableAccount[];
+  }> {
+    const addressLookupTableAccounts: AddressLookupTableAccount[] = [];
+
+    // Fetch Address Lookup Tables if the transaction uses them
+    if (tx.message.addressTableLookups.length > 0) {
+      const lookupTableAddresses = tx.message.addressTableLookups.map(
+        (lookup) => lookup.accountKey
+      );
+
+      const lookupTableAccounts = await Promise.all(
+        lookupTableAddresses.map(async (address) => {
+          const account = await this.connection.getAddressLookupTable(address);
+          if (!account.value) {
+            throw new Error(`Lookup table not found: ${address.toBase58()}`);
+          }
+          return account.value;
+        })
+      );
+
+      addressLookupTableAccounts.push(...lookupTableAccounts);
+    }
+
+    // Decompile the message to get raw instructions
+    const decompiled = TransactionMessage.decompile(tx.message, {
+      addressLookupTableAccounts,
+    });
+
+    return {
+      instructions: decompiled.instructions,
+      addressLookupTableAccounts,
+    };
   }
 
   /**
