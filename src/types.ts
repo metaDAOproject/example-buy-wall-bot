@@ -38,42 +38,20 @@ export interface BotConfig {
 }
 
 /**
- * Jupiter Price API response
+ * Jupiter Price API v3 response
+ * Returns USD prices for tokens
  */
-export interface JupiterPriceResponse {
-  data: {
-    [tokenMint: string]: {
-      id: string;
-      type: string;
-      price: string;
-      extraInfo?: {
-        lastSwappedPrice?: {
-          lastJupiterSellAt: number;
-          lastJupiterSellPrice: string;
-          lastJupiterBuyAt: number;
-          lastJupiterBuyPrice: string;
-        };
-        quotedPrice?: {
-          buyPrice: string;
-          buyAt: number;
-          sellPrice: string;
-          sellAt: number;
-        };
-        confidenceLevel?: string;
-        depth?: {
-          buyPriceImpactRatio: {
-            depth: { [amount: string]: number };
-            timestamp: number;
-          };
-          sellPriceImpactRatio: {
-            depth: { [amount: string]: number };
-            timestamp: number;
-          };
-        };
-      };
-    };
-  };
-  timeTaken: number;
+export interface JupiterPriceV3Response {
+  [tokenMint: string]: {
+    /** USD price of the token */
+    usdPrice: number;
+    /** Block ID when price was fetched */
+    blockId: number;
+    /** Token decimals */
+    decimals: number;
+    /** 24h price change percentage */
+    priceChange24h?: number;
+  } | null;
 }
 
 /**

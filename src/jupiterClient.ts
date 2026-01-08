@@ -1,11 +1,11 @@
 import {
-  JupiterPriceResponse,
+  JupiterPriceV3Response,
   JupiterOrderRequest,
   JupiterOrderResponse,
-  USDC_MINT,
 } from "./types.ts";
 
-const JUPITER_PRICE_API = "https://api.jup.ag/price/v2";
+// Jupiter Price API v3 - returns USD prices for tokens
+const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
 const JUPITER_ULTRA_API = "https://api.jup.ag/ultra/v1";
 
 export class JupiterClient {
@@ -16,15 +16,14 @@ export class JupiterClient {
   }
 
   /**
-   * Get the current price of a token in USDC
+   * Get the current price of a token in USD
+   * Note: Jupiter v3 returns USD prices directly (USDC ≈ USD for our purposes)
    * @param tokenMint Token mint address
-   * @returns Price in USDC (human readable)
+   * @returns Price in USD (human readable)
    */
   async getTokenPrice(tokenMint: string): Promise<number> {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMint);
-    url.searchParams.set("vsToken", USDC_MINT);
-    url.searchParams.set("showExtraInfo", "true");
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -37,25 +36,25 @@ export class JupiterClient {
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterPriceResponse = await response.json();
-    const tokenData = data.data[tokenMint];
+    const data = (await response.json()) as JupiterPriceV3Response;
+    const tokenData = data[tokenMint];
 
     if (!tokenData) {
       throw new Error(`No price data found for token: ${tokenMint}`);
     }
 
-    return parseFloat(tokenData.price);
+    return tokenData.usdPrice;
   }
 
   /**
-   * Get prices for multiple tokens in USDC
+   * Get prices for multiple tokens in USD
+   * Note: Jupiter v3 returns USD prices directly (USDC ≈ USD for our purposes)
    * @param tokenMints Array of token mint addresses
-   * @returns Map of token mint to price in USDC
+   * @returns Map of token mint to price in USD
    */
   async getTokenPrices(tokenMints: string[]): Promise<Map<string, number>> {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMints.join(","));
-    url.searchParams.set("vsToken", USDC_MINT);
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -68,12 +67,12 @@ export class JupiterClient {
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterPriceResponse = await response.json();
+    const data = (await response.json()) as JupiterPriceV3Response;
     const prices = new Map<string, number>();
 
-    for (const [mint, tokenData] of Object.entries(data.data)) {
-      if (tokenData && tokenData.price) {
-        prices.set(mint, parseFloat(tokenData.price));
+    for (const [mint, tokenData] of Object.entries(data)) {
+      if (tokenData && tokenData.usdPrice) {
+        prices.set(mint, tokenData.usdPrice);
       }
     }
 
@@ -114,7 +113,7 @@ export class JupiterClient {
       throw new Error(`Jupiter Ultra API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterOrderResponse = await response.json();
+    const data = (await response.json()) as JupiterOrderResponse;
 
     if (data.simulationError) {
       throw new Error(`Jupiter simulation error: ${data.simulationError}`);
@@ -152,7 +151,7 @@ export class JupiterClient {
       throw new Error(`Jupiter Execute API error: ${response.status} - ${errorText}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { status?: string; error?: string; signature: string };
 
     if (data.status === "Failed") {
       throw new Error(`Jupiter execution failed: ${data.error || "Unknown error"}`);
@@ -197,7 +196,7 @@ export class JupiterClient {
       throw new Error(`Jupiter Quote API error: ${response.status} - ${errorText}`);
     }
 
-    const data: JupiterOrderResponse = await response.json();
+    const data = (await response.json()) as JupiterOrderResponse;
 
     return {
       inAmount: data.inAmount,
