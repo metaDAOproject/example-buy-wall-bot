@@ -50,24 +50,18 @@ export interface JupiterPriceResponse {
 }
 
 /**
- * Jupiter Ultra Order request
- */
-export interface JupiterOrderRequest {
-  inputMint: string;
-  outputMint: string;
-  amount: string;
-  taker: string;
-}
-
-/**
  * Jupiter Ultra Order response
+ * Docs: https://dev.jup.ag/api-reference/ultra/order
  */
 export interface JupiterOrderResponse {
-  requestId: string;
+  mode: string;
+  inputMint: string;
+  outputMint: string;
   inAmount: string;
   outAmount: string;
   otherAmountThreshold: string;
-  swapType: string;
+  swapMode: string;
+  slippageBps: number;
   priceImpactPct: string;
   routePlan: Array<{
     swapInfo: {
@@ -81,19 +75,39 @@ export interface JupiterOrderResponse {
       feeMint: string;
     };
     percent: number;
+    bps?: number;
+    usdValue?: number;
   }>;
-  contextSlot: number;
-  transaction: string;
-  prioritizationFeeLamports: number;
-  dynamicSlippageReport?: {
-    slippageBps: number;
-    otherAmount: string;
-    simulatedIncurredSlippageBps: number;
-    amplificationRatio: string;
-    categoryName: string;
-    heuristicMaxSlippageBps: number;
+  feeBps: number;
+  platformFee?: {
+    feeBps: number;
+    amount: string;
   };
-  simulationError?: string;
+  signatureFeeLamports: number;
+  signatureFeePayer: string | null;
+  prioritizationFeeLamports: number;
+  prioritizationFeePayer: string | null;
+  rentFeeLamports: number;
+  rentFeePayer: string | null;
+  swapType: string;
+  router: "iris" | "jupiterz" | "dflow" | "okx";
+  transaction: string | null;
+  gasless: boolean;
+  requestId: string;
+  totalTime: number;
+  taker: string | null;
+  inUsdValue?: number;
+  outUsdValue?: number;
+  priceImpact?: number;
+  swapUsdValue?: number;
+  referralAccount?: string;
+  feeMint?: string;
+  quoteId?: string;
+  maker?: string;
+  expireAt?: string;
+  // Error fields - present when transaction is null
+  errorCode?: 1 | 2 | 3;
+  errorMessage?: string;
 }
 
 /**
