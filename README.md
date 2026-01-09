@@ -63,7 +63,7 @@ DRY_RUN=true
 
 # Bid Wall Configurations (JSON array)
 # Format: [{"tokenMint": "...", "bidWallAddress": "...", "name": "Optional Name"}]
-BID_WALLS=[{"tokenMint":"TOKEN_MINT_ADDRESS","bidWallAddress":"BID_WALL_ADDRESS","name":"TOKEN"}]
+BID_WALLS='[{"tokenMint":"TOKEN_MINT_ADDRESS","bidWallAddress":"BID_WALL_ADDRESS","name":"TOKEN"}]'
 ```
 
 ### Finding Bid Walls

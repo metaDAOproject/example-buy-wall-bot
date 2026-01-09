@@ -18,8 +18,32 @@ function loadServerConfig() {
 
   const parseBidWalls = (json: string): BidWallConfig[] => {
     if (!json || json === "[]") return [];
+    
+    // Debug: show what we're trying to parse
+    console.log("[Server] Raw BID_WALLS value:", JSON.stringify(json));
+    
+    // Fix for shell stripping quotes: convert JS object notation to valid JSON
+    // This handles cases like {tokenMint:value} -> {"tokenMint":"value"}
+    let fixedJson = json;
+    if (json.includes("{") && !json.includes('"')) {
+      console.log("[Server] Detected unquoted JSON, attempting to fix...");
+      // Add quotes around keys: {tokenMint: or ,bidWallAddress: -> {"tokenMint": or ,"bidWallAddress":
+      fixedJson = json.replace(/([{,])\s*(\w+)\s*:/g, '$1"$2":');
+      // Add quotes around string values (everything between : and , or })
+      // This handles values with spaces like "Token 1"
+      fixedJson = fixedJson.replace(/:([^,\}\]"]+)([,\}\]])/g, (match, value, delimiter) => {
+        const trimmed = value.trim();
+        // Don't quote numbers, booleans, or null
+        if (/^-?\d+\.?\d*$/.test(trimmed) || trimmed === 'true' || trimmed === 'false' || trimmed === 'null') {
+          return `:${trimmed}${delimiter}`;
+        }
+        return `:"${trimmed}"${delimiter}`;
+      });
+      console.log("[Server] Fixed JSON:", fixedJson);
+    }
+    
     try {
-      const parsed = JSON.parse(json);
+      const parsed = JSON.parse(fixedJson);
       if (!Array.isArray(parsed)) throw new Error("BID_WALLS must be a JSON array");
       return parsed.map((item, index) => {
         if (!item.tokenMint || !item.bidWallAddress) {
@@ -33,7 +57,7 @@ function loadServerConfig() {
       });
     } catch (error) {
       if (error instanceof SyntaxError) {
-        throw new Error(`Invalid JSON in BID_WALLS: ${error.message}`);
+        throw new Error(`Invalid JSON in BID_WALLS: ${error.message}\nValue was: ${json.slice(0, 200)}\nTip: Try escaping quotes in .env: BID_WALLS=[{\\"tokenMint\\":\\"...\\",...}]`);
       }
       throw error;
     }
@@ -83,13 +107,20 @@ const server = Bun.serve({
         const bidWallsInfo = await Promise.all(
           config.bidWalls.map(async (bw) => {
             try {
-              const [priceInfo, activeStatus, spotPrice] = await Promise.all([
+              const [priceInfo, activeStatus] = await Promise.all([
                 bidWallService.calculateBidWallPrice(bw.bidWallAddress, bw.tokenMint),
                 bidWallService.isBidWallActive(bw.bidWallAddress),
-                jupiterClient.getTokenPrice(bw.tokenMint.toBase58()),
               ]);
 
               const bidWall = await bidWallService.fetchBidWall(bw.bidWallAddress);
+
+              // Fetch Jupiter spot price (don't fail if this errors)
+              let spotPrice: number | null = null;
+              try {
+                spotPrice = await jupiterClient.getTokenPrice(bw.tokenMint.toBase58());
+              } catch (e) {
+                console.warn(`Failed to fetch Jupiter price for ${bw.name}:`, e);
+              }
 
               return {
                 tokenMint: bw.tokenMint.toBase58(),
@@ -100,8 +131,9 @@ const server = Bun.serve({
                 totalNav: priceInfo.totalNav,
                 activeSupply: priceInfo.activeSupply,
                 quoteAmount: bidWall?.quoteAmount.toNumber() || 0,
-                isActive: activeStatus.active,
+                tokensBurned: bidWall?.baseBoughtAmount.toNumber() || 0,
                 spotPrice,
+                isActive: activeStatus.active,
               };
             } catch (error) {
               console.error(`Error fetching bid wall ${bw.name}:`, error);
@@ -114,8 +146,9 @@ const server = Bun.serve({
                 totalNav: 0,
                 activeSupply: 0,
                 quoteAmount: 0,
+                tokensBurned: 0,
+                spotPrice: null,
                 isActive: false,
-                spotPrice: 0,
                 error: String(error),
               };
             }
@@ -239,10 +272,10 @@ const server = Bun.serve({
         );
       }
 
-      // POST /api/sell-to-bidwall - Sell tokens to the bid wall (separate endpoint)
-      if (url.pathname === "/api/sell-to-bidwall" && req.method === "POST") {
+      // POST /api/sell - Create a sell transaction to sell tokens to the bid wall
+      if (url.pathname === "/api/sell" && req.method === "POST") {
         const body = await req.json();
-        const { bidWallAddress, tokenAmount, taker } = body;
+        const { bidWallAddress, tokenAmount, seller } = body;
 
         const bidWallConfig = config.bidWalls.find(
           (bw) => bw.bidWallAddress.toBase58() === bidWallAddress
@@ -263,20 +296,23 @@ const server = Bun.serve({
           );
         }
 
+        // Token amount comes as a float, convert to lamports (6 decimals for most tokens)
+        const tokenAmountLamports = Math.floor(tokenAmount * 1_000_000);
+
         // Create the sell tokens instruction
         const sellIx = await bidWallService.createSellTokensInstruction({
-          amount: new BN(tokenAmount),
+          amount: new BN(tokenAmountLamports),
           bidWall: bidWallConfig.bidWallAddress,
           baseMint: bidWallConfig.tokenMint,
           quoteMint: new PublicKey(USDC_MINT),
           daoTreasury: bidWall.daoTreasury,
-          user: new PublicKey(taker),
+          user: new PublicKey(seller),
         });
 
         // Build the transaction
         const { blockhash } = await connection.getLatestBlockhash();
         const message = new TransactionMessage({
-          payerKey: new PublicKey(taker),
+          payerKey: new PublicKey(seller),
           recentBlockhash: blockhash,
           instructions: [sellIx],
         }).compileToV0Message();
@@ -286,6 +322,33 @@ const server = Bun.serve({
 
         return Response.json(
           { transaction: txBase64 },
+          { headers: corsHeaders }
+        );
+      }
+
+      // POST /api/execute-sell - Send a signed sell transaction
+      if (url.pathname === "/api/execute-sell" && req.method === "POST") {
+        const body = await req.json();
+        const { signedTransaction } = body;
+
+        const txBuffer = Buffer.from(signedTransaction, "base64");
+        const signature = await connection.sendRawTransaction(txBuffer, {
+          skipPreflight: false,
+          preflightCommitment: "confirmed",
+        });
+
+        // Wait for confirmation
+        const confirmation = await connection.confirmTransaction(signature, "confirmed");
+        
+        if (confirmation.value.err) {
+          return Response.json(
+            { error: `Transaction failed: ${JSON.stringify(confirmation.value.err)}` },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json(
+          { signature, success: true },
           { headers: corsHeaders }
         );
       }

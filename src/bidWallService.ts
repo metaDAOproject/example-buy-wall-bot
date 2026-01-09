@@ -11,6 +11,7 @@ import {
   ArbitrageOpportunity,
   BID_WALL_FEE_PERCENT,
   USDC_MINT,
+  INITIAL_TOKEN_SUPPLY,
 } from "./types.ts";
 
 export class BidWallService {
@@ -40,10 +41,10 @@ export class BidWallService {
       quoteAmount: account.quoteAmount,
       initialAmmQuoteReserves: account.initialAmmQuoteReserves,
       feesCollected: account.feesCollected,
+      baseBoughtAmount: account.baseBoughtAmount,
       createdAt: account.createdTimestamp,
       expiresAt: account.createdTimestamp.add(new BN(account.durationSeconds)),
     };
-    // return account as BidWallAccount;
   }
 
   /**
@@ -76,14 +77,13 @@ export class BidWallService {
 
   /**
    * Calculate the NAV per token (bid wall price) based on:
-   * - DAO treasury USDC balance
-   * - Initial AMM quote reserves (tracked by bid wall)
-   * - Bid wall remaining balance
-   * - Active token supply
+   * NAV = DAO treasury USDC + Initial AMM quote reserves + Bid wall quote amount
+   * Active Supply = 10M tokens - tokens burned (baseBoughtAmount)
+   * NAV per token = NAV / Active Supply
    */
   async calculateBidWallPrice(
     bidWallAddress: PublicKey,
-    tokenMint: PublicKey
+    _tokenMint?: PublicKey // Kept for API compatibility, but no longer needed
   ): Promise<{
     navPerToken: number;
     priceAfterFee: number;
@@ -106,33 +106,32 @@ export class BidWallService {
     );
     const daoTreasuryUsdc = parseFloat(daoTreasuryBalance.value.amount);
 
-    // Get bid wall remaining balance
-    const bidWallRemainingUsdc = bidWall.quoteAmount
-      .toNumber();
+    // Get bid wall remaining balance (quote amount assigned to bid wall)
+    const bidWallQuoteAmount = bidWall.quoteAmount.toNumber();
 
-    // AMM quote reserves (from bid wall initialization)
+    // AMM quote reserves (initial liquidity from bid wall initialization)
     const ammQuoteReserves = bidWall.initialAmmQuoteReserves.toNumber();
 
-    // Total NAV = DAO treasury + AMM reserves + bid wall balance
-    const totalNav = daoTreasuryUsdc + ammQuoteReserves + bidWallRemainingUsdc;
+    // Total NAV = DAO treasury + Initial AMM reserves + Bid wall quote amount
+    const totalNav = daoTreasuryUsdc + ammQuoteReserves + bidWallQuoteAmount;
 
-    // Get active token supply (total supply minus any locked/burned tokens)
-    // For simplicity, we'll use the token's total supply
-    // In practice, you might need to subtract locked tokens
-    const tokenSupplyInfo = await this.connection.getTokenSupply(tokenMint);
-    const activeSupply = parseFloat(tokenSupplyInfo.value.amount);
+    // Tokens burned = amount bought by bid wall
+    const tokensBurned = bidWall.baseBoughtAmount.toNumber();
 
-    // NAV per token
-    const navPerToken = totalNav / activeSupply;
+    // Active supply = 10M tokens - tokens burned
+    const activeSupply = INITIAL_TOKEN_SUPPLY - tokensBurned;
+
+    // NAV per token (in raw amounts - both are in 6 decimal format)
+    const navPerToken = activeSupply > 0 ? totalNav / activeSupply : 0;
 
     // Price after 1% bid wall fee
     const priceAfterFee = navPerToken * (1 - BID_WALL_FEE_PERCENT / 100);
 
     return {
-      navPerToken: navPerToken / 1_000_000, // Convert to human readable USDC
-      priceAfterFee: priceAfterFee / 1_000_000,
-      totalNav: totalNav / 1_000_000,
-      activeSupply: activeSupply / 1_000_000, // Assuming 6 decimal token
+      navPerToken: navPerToken, // Already in USDC per token (both have 6 decimals, they cancel out)
+      priceAfterFee: priceAfterFee,
+      totalNav: totalNav / 1_000_000, // Convert to human readable USDC
+      activeSupply: activeSupply / 1_000_000, // Convert to human readable token amount
     };
   }
 

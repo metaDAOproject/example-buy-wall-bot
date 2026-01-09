@@ -145,9 +145,16 @@ export interface BidWallAccount {
   quoteAmount: BN;
   initialAmmQuoteReserves: BN;
   feesCollected: BN;
+  /** Amount of base tokens bought/burned by the bid wall */
+  baseBoughtAmount: BN;
   createdAt: BN;
   expiresAt: BN;
 }
+
+/**
+ * Initial token supply (10 million tokens with 6 decimals)
+ */
+export const INITIAL_TOKEN_SUPPLY = 10_000_000 * 1_000_000; // 10M tokens in lamports
 
 /**
  * Arbitrage opportunity details
