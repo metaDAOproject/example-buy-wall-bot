@@ -9,7 +9,11 @@
     "dev": "bun --watch src/index.ts",
     "dry-run": "DRY_RUN=true bun run src/index.ts",
     "build": "bun build src/index.ts --outdir=dist --target=bun",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "server": "bun run src/server.ts",
+    "frontend": "cd frontend && bun run dev",
+    "frontend:install": "cd frontend && bun install",
+    "dev:all": "bun run server & cd frontend && bun run dev"
   },
   "keywords": [
     "solana",

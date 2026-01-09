@@ -1,12 +1,21 @@
 import {
   JupiterPriceResponse,
-  JupiterOrderRequest,
   JupiterOrderResponse,
   JupiterExecuteResponse,
 } from "./types.ts";
 
+// Jupiter API endpoints
+// Docs: https://dev.jup.ag/api-reference/price/v3/price
 const JUPITER_PRICE_API = "https://api.jup.ag/price/v3";
+// Docs: https://dev.jup.ag/api-reference/ultra/order
 const JUPITER_ULTRA_API = "https://api.jup.ag/ultra/v1";
+
+// Debug flag - set to true to see API requests/responses in console
+const DEBUG = true;
+
+function log(...args: unknown[]) {
+  if (DEBUG) console.log("[Jupiter]", ...args);
+}
 
 export class JupiterClient {
   private apiKey: string;
@@ -17,6 +26,7 @@ export class JupiterClient {
 
   /**
    * Get the current price of a token in USD
+   * Docs: https://dev.jup.ag/api-reference/price/v3/price
    * @param tokenMint Token mint address
    * @returns Price in USD (human readable)
    */
@@ -24,24 +34,33 @@ export class JupiterClient {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMint);
 
+    log("GET Price:", url.toString());
+
     const response = await fetch(url.toString(), {
       headers: {
         "x-api-key": this.apiKey,
       },
     });
 
+    log("Price Response status:", response.status);
+
     if (!response.ok) {
       const errorText = await response.text();
+      log("Price Error response:", errorText);
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
     const data: JupiterPriceResponse = await response.json() as JupiterPriceResponse;
+    log("Price data keys:", Object.keys(data));
+    
     const tokenData = data[tokenMint];
 
     if (!tokenData) {
+      log("Available tokens in response:", Object.keys(data));
       throw new Error(`No price data found for token: ${tokenMint}`);
     }
 
+    log("Token price:", tokenData.usdPrice);
     return tokenData.usdPrice;
   }
 
@@ -54,6 +73,8 @@ export class JupiterClient {
     const url = new URL(JUPITER_PRICE_API);
     url.searchParams.set("ids", tokenMints.join(","));
 
+    log("GET Prices:", url.toString());
+
     const response = await fetch(url.toString(), {
       headers: {
         "x-api-key": this.apiKey,
@@ -62,6 +83,7 @@ export class JupiterClient {
 
     if (!response.ok) {
       const errorText = await response.text();
+      log("Prices Error:", errorText);
       throw new Error(`Jupiter Price API error: ${response.status} - ${errorText}`);
     }
 
@@ -79,6 +101,8 @@ export class JupiterClient {
 
   /**
    * Create a swap order using Jupiter Ultra API
+   * Docs: https://dev.jup.ag/api-reference/ultra/order
+   * NOTE: This is a GET request with query params, not POST!
    * @param params Order parameters
    * @returns Order response with transaction
    */
@@ -88,35 +112,45 @@ export class JupiterClient {
     amount: string;
     taker: string;
   }): Promise<JupiterOrderResponse> {
-    const url = `${JUPITER_ULTRA_API}/order`;
+    const url = new URL(`${JUPITER_ULTRA_API}/order`);
+    url.searchParams.set("inputMint", params.inputMint);
+    url.searchParams.set("outputMint", params.outputMint);
+    url.searchParams.set("amount", params.amount);
+    url.searchParams.set("taker", params.taker);
 
-    const body: JupiterOrderRequest = {
-      inputMint: params.inputMint,
-      outputMint: params.outputMint,
-      amount: params.amount,
-      taker: params.taker,
-    };
+    log("GET Order:", url.toString());
 
-    const response = await fetch(url, {
-      method: "POST",
+    const response = await fetch(url.toString(), {
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
         "x-api-key": this.apiKey,
       },
-      body: JSON.stringify(body),
     });
+
+    log("Order Response status:", response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
+      log("Order Error response:", errorText);
       throw new Error(`Jupiter Ultra API error: ${response.status} - ${errorText}`);
     }
 
     const data: JupiterOrderResponse = await response.json() as JupiterOrderResponse;
+    log("Order response keys:", Object.keys(data));
+    log("Order requestId:", data.requestId);
+    log("Order transaction exists:", !!data.transaction);
+    
     if (!data) {
       throw new Error(`No order data found`);
     }
-    if (data.simulationError) {
-      throw new Error(`Jupiter simulation error: ${data.simulationError}`);
+    
+    // Check for error in response (can happen even with 200 status)
+    if (data.errorCode) {
+      throw new Error(`Jupiter order error: ${data.errorMessage || `Error code ${data.errorCode}`}`);
+    }
+    
+    if (!data.transaction) {
+      throw new Error(`No transaction returned. Error: ${data.errorMessage || 'Unknown'}`);
     }
 
     return data;
@@ -124,6 +158,7 @@ export class JupiterClient {
 
   /**
    * Execute a swap order by sending the signed transaction
+   * Docs: https://dev.jup.ag/api-reference/ultra/execute
    * @param signedTransaction Base64 encoded signed transaction
    * @param requestId Request ID from createOrder
    * @returns Transaction signature
@@ -133,6 +168,9 @@ export class JupiterClient {
     requestId: string
   ): Promise<string> {
     const url = `${JUPITER_ULTRA_API}/execute`;
+
+    log("POST Execute:", url);
+    log("Execute requestId:", requestId);
 
     const response = await fetch(url, {
       method: "POST",
@@ -146,12 +184,16 @@ export class JupiterClient {
       }),
     });
 
+    log("Execute Response status:", response.status);
+
     if (!response.ok) {
       const errorText = await response.text();
+      log("Execute Error response:", errorText);
       throw new Error(`Jupiter Execute API error: ${response.status} - ${errorText}`);
     }
 
     const data: JupiterExecuteResponse = await response.json() as JupiterExecuteResponse;
+    log("Execute response:", JSON.stringify(data, null, 2));
 
     if (data.status === "Failed") {
       throw new Error(`Jupiter execution failed: ${data.error || "Unknown error"}`);
@@ -166,7 +208,7 @@ export class JupiterClient {
 
   /**
    * Get a quote for swapping tokens (without creating an order)
-   * This is useful for simulating the swap outcome
+   * Uses the order endpoint without a taker to get quote info
    */
   async getSwapQuote(params: {
     inputMint: string;
@@ -177,30 +219,31 @@ export class JupiterClient {
     outAmount: string;
     priceImpactPct: string;
   }> {
-    // Use the order endpoint but we won't execute it
-    // The Ultra API returns quote info in the order response
-    const url = `${JUPITER_ULTRA_API}/order`;
+    const url = new URL(`${JUPITER_ULTRA_API}/order`);
+    url.searchParams.set("inputMint", params.inputMint);
+    url.searchParams.set("outputMint", params.outputMint);
+    url.searchParams.set("amount", params.amount);
+    // Don't set taker - this gives us a quote without a transaction
 
-    const response = await fetch(url, {
-      method: "POST",
+    log("GET Quote:", url.toString());
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
         "x-api-key": this.apiKey,
       },
-      body: JSON.stringify({
-        inputMint: params.inputMint,
-        outputMint: params.outputMint,
-        amount: params.amount,
-        taker: "11111111111111111111111111111111", // Dummy taker for quote
-      }),
     });
+
+    log("Quote Response status:", response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
+      log("Quote Error response:", errorText);
       throw new Error(`Jupiter Quote API error: ${response.status} - ${errorText}`);
     }
 
     const data: JupiterOrderResponse = await response.json() as JupiterOrderResponse;
+    log("Quote inAmount:", data.inAmount, "outAmount:", data.outAmount);
 
     return {
       inAmount: data.inAmount,
@@ -209,4 +252,3 @@ export class JupiterClient {
     };
   }
 }
-
