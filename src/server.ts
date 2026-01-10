@@ -91,14 +91,36 @@ const corsHeaders = {
 // Store pending orders for execution
 const pendingOrders = new Map<string, { requestId: string; bidWallAddress: string; tokenAmount: string }>();
 
+const PORT = process.env.PORT || 3001;
+
 const server = Bun.serve({
-  port: 3001,
+  port: Number(PORT),
   async fetch(req) {
     const url = new URL(req.url);
     
     // Handle CORS preflight
     if (req.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders });
+    }
+    
+    // Serve static frontend files in production
+    if (!url.pathname.startsWith("/api")) {
+      const frontendPath = "./frontend/dist";
+      let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+      
+      try {
+        const file = Bun.file(`${frontendPath}${filePath}`);
+        if (await file.exists()) {
+          return new Response(file);
+        }
+        // SPA fallback - serve index.html for client-side routing
+        const indexFile = Bun.file(`${frontendPath}/index.html`);
+        if (await indexFile.exists()) {
+          return new Response(indexFile);
+        }
+      } catch {
+        // Frontend not built, continue to API routes
+      }
     }
 
     try {
@@ -372,7 +394,17 @@ const server = Bun.serve({
   },
 });
 
-console.log(`🚀 API Server running at http://localhost:${server.port}`);
+console.log(`🚀 Server running at http://localhost:${server.port}`);
+console.log(`   API: http://localhost:${server.port}/api/*`);
+
+// Check if frontend is built
+const frontendIndex = Bun.file("./frontend/dist/index.html");
+if (await frontendIndex.exists()) {
+  console.log(`   Frontend: http://localhost:${server.port}/`);
+} else {
+  console.log(`   Frontend: Not built (run 'cd frontend && bun run build')`);
+}
+
 console.log(`📋 Configured bid walls: ${config.bidWalls.length}`);
 config.bidWalls.forEach((bw, i) => {
   console.log(`   ${i + 1}. ${bw.name || "Unnamed"}: ${bw.tokenMint.toBase58().slice(0, 8)}...`);

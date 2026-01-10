@@ -13,7 +13,9 @@
     "server": "bun run src/server.ts",
     "frontend": "cd frontend && bun run dev",
     "frontend:install": "cd frontend && bun install",
-    "dev:all": "bun run server & cd frontend && bun run dev"
+    "frontend:build": "cd frontend && bun install && bun run build",
+    "dev:all": "bun run server & cd frontend && bun run dev",
+    "production": "cd frontend && bun install && bun run build && cd .. && bun run src/server.ts"
   },
   "keywords": [
     "solana",
