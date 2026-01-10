@@ -150,27 +150,46 @@ export class BidWallService {
         bidWallConfig.tokenMint
       );
 
+    // Get bid wall balance
+    const bidWall = await this.fetchBidWall(bidWallConfig.bidWallAddress);
+    const bidWallBalanceUsdc = bidWall ? bidWall.quoteAmount.toNumber() / 1_000_000 : 0;
+
     // Calculate the threshold price (bid wall price minus buffer)
     const totalBufferPercent = BID_WALL_FEE_PERCENT + priceBufferPercent;
     const thresholdPrice = navPerToken * (1 - totalBufferPercent / 100);
 
     // Calculate profit if we trade
     const tokensWeCanBuy = tradeSizeUsdc / spotPriceUsdc;
-    const usdcFromBidWall = tokensWeCanBuy * priceAfterFee;
-    const profitUsdc = usdcFromBidWall - tradeSizeUsdc;
+    const expectedOutputUsdc = tokensWeCanBuy * priceAfterFee;
+    const profitUsdc = expectedOutputUsdc - tradeSizeUsdc;
     const profitPercent = (profitUsdc / tradeSizeUsdc) * 100;
 
-    // It's profitable if spot price is below threshold
-    const isProfitable = spotPriceUsdc < thresholdPrice;
+    // Check profitability conditions
+    const priceIsProfitable = spotPriceUsdc < thresholdPrice;
+    const hasEnoughBalance = expectedOutputUsdc <= bidWallBalanceUsdc;
+    const isProfitable = priceIsProfitable && hasEnoughBalance;
+
+    // Determine reason if not profitable
+    let notProfitableReason: 'price' | 'insufficient_balance' | undefined;
+    if (!isProfitable) {
+      if (!priceIsProfitable) {
+        notProfitableReason = 'price';
+      } else if (!hasEnoughBalance) {
+        notProfitableReason = 'insufficient_balance';
+      }
+    }
 
     return {
       bidWallConfig,
       spotPriceUsdc,
       bidWallPriceUsdc: navPerToken,
       bidWallPriceAfterFee: priceAfterFee,
+      bidWallBalanceUsdc,
+      expectedOutputUsdc,
       profitPercent,
       estimatedProfitUsdc: profitUsdc,
       isProfitable,
+      notProfitableReason,
     };
   }
 
@@ -217,13 +236,28 @@ export class BidWallService {
  */
 export function formatOpportunity(opp: ArbitrageOpportunity): string {
   const name = opp.bidWallConfig.name || opp.bidWallConfig.tokenMint.toBase58().slice(0, 8) + "...";
-  const status = opp.isProfitable ? "✅ PROFITABLE" : "❌ Not profitable";
+  
+  // Determine status with more detail
+  let status: string;
+  if (opp.isProfitable) {
+    status = "✅ PROFITABLE";
+  } else if (opp.notProfitableReason === 'insufficient_balance') {
+    status = "⚠️  INSUFFICIENT WALL BALANCE";
+  } else {
+    status = "❌ Not profitable (price)";
+  }
+
+  // Show wall balance with warning if insufficient
+  const balanceDisplay = opp.notProfitableReason === 'insufficient_balance'
+    ? `$${opp.bidWallBalanceUsdc.toFixed(2)} USDC ⚠️  (need $${opp.expectedOutputUsdc.toFixed(2)})`
+    : `$${opp.bidWallBalanceUsdc.toFixed(2)} USDC`;
 
   return `
 ┌─ ${name} ${status}
 │  Spot Price:      $${opp.spotPriceUsdc.toFixed(6)} USDC
 │  Bid Wall NAV:    $${opp.bidWallPriceUsdc.toFixed(6)} USDC
 │  After 1% Fee:    $${opp.bidWallPriceAfterFee.toFixed(6)} USDC
+│  Wall Balance:    ${balanceDisplay}
 │  Est. Profit:     ${opp.profitPercent >= 0 ? "+" : ""}${opp.profitPercent.toFixed(2)}% ($${opp.estimatedProfitUsdc.toFixed(2)})
 └──────────────────────────────`;
 }

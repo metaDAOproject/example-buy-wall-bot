@@ -164,9 +164,13 @@ export interface ArbitrageOpportunity {
   spotPriceUsdc: number;
   bidWallPriceUsdc: number;
   bidWallPriceAfterFee: number;
+  bidWallBalanceUsdc: number;
+  expectedOutputUsdc: number;
   profitPercent: number;
   estimatedProfitUsdc: number;
   isProfitable: boolean;
+  /** If not profitable, the reason why */
+  notProfitableReason?: 'price' | 'insufficient_balance';
 }
 
 /**

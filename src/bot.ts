@@ -37,9 +37,37 @@ export class BidWallArbitrageBot {
     this.config = config;
     this.connection = new Connection(config.rpcUrl, "confirmed");
 
-    // Decode wallet from base58 private key
-    const secretKey = bs58.decode(config.walletPrivateKey);
-    this.wallet = Keypair.fromSecretKey(secretKey);
+    // Decode wallet from private key (supports base58 or JSON byte array)
+    try {
+      let secretKey: Uint8Array;
+      
+      // Check if it's a JSON byte array (starts with '[')
+      if (config.walletPrivateKey.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(config.walletPrivateKey);
+          secretKey = Uint8Array.from(parsed);
+          console.log("✅ Loaded wallet from JSON byte array format");
+        } catch (jsonError) {
+          throw new Error(`Invalid JSON byte array format: ${jsonError}`);
+        }
+      } else {
+        // Try base58 decode
+        try {
+          secretKey = bs58.decode(config.walletPrivateKey);
+          console.log("✅ Loaded wallet from base58 format");
+        } catch (b58Error) {
+          throw new Error(`Invalid base58 format: ${b58Error}`);
+        }
+      }
+      
+      this.wallet = Keypair.fromSecretKey(secretKey);
+    } catch (error) {
+      console.error("❌ Error decoding wallet private key:", error);
+      console.error("   Supported formats:");
+      console.error("   - Base58 encoded string");
+      console.error("   - JSON byte array: [1,2,3,...] (64 numbers)");
+      throw error;
+    }
 
     this.jupiterClient = new JupiterClient(config.jupiterApiKey);
 
@@ -210,29 +238,8 @@ export class BidWallArbitrageBot {
     }
 
     try {
-      // Step 1: Get Jupiter swap quote/order (USDC -> Token)
-      console.log("   📝 Creating Jupiter swap order...");
-      const jupiterOrder = await this.jupiterClient.createOrder({
-        inputMint: USDC_MINT,
-        outputMint: opportunity.bidWallConfig.tokenMint.toBase58(),
-        amount: this.config.tradeSizeUsdc.toString(),
-        taker: this.wallet.publicKey.toBase58(),
-      });
-
-      const tokensReceived = BigInt(jupiterOrder.outAmount);
-      console.log(
-        `   💱 Jupiter: ${this.config.tradeSizeUsdc / 1_000_000} USDC -> ${Number(tokensReceived) / 1_000_000} tokens`
-      );
-
-      // Step 2: Build atomic transaction with Jupiter swap + Bid Wall sell
-      console.log("   🔧 Building atomic transaction...");
-
-      // Decode Jupiter transaction
-      const jupiterTx = VersionedTransaction.deserialize(
-        Buffer.from(jupiterOrder.transaction, "base64")
-      );
-
-      // Get bid wall account for daoTreasury
+      // Step 0: Check bid wall balance first
+      console.log("   🏦 Checking bid wall balance...");
       const bidWallAccount = await this.bidWallService.fetchBidWall(
         opportunity.bidWallConfig.bidWallAddress
       );
@@ -245,6 +252,61 @@ export class BidWallArbitrageBot {
           error: "Bid wall account not found",
         };
       }
+
+      const bidWallUsdcBalance = bidWallAccount.quoteAmount.toNumber() / 1_000_000;
+      console.log(`      Available: $${bidWallUsdcBalance.toFixed(2)} USDC`);
+
+      // Step 1: Get Jupiter swap quote/order (USDC -> Token)
+      console.log("   📝 Creating Jupiter swap order...");
+      const jupiterOrder = await this.jupiterClient.createOrder({
+        inputMint: USDC_MINT,
+        outputMint: opportunity.bidWallConfig.tokenMint.toBase58(),
+        amount: this.config.tradeSizeUsdc.toString(),
+        taker: this.wallet.publicKey.toBase58(),
+      });
+
+      const tokensReceived = BigInt(jupiterOrder.outAmount);
+      const tokensReceivedFloat = Number(tokensReceived) / 1_000_000;
+      console.log(
+        `   💱 Jupiter: ${this.config.tradeSizeUsdc / 1_000_000} USDC -> ${tokensReceivedFloat} tokens`
+      );
+
+      // Check if bid wall has enough USDC to pay out
+      const estimatedUsdcFromBidWall = tokensReceivedFloat * opportunity.bidWallPriceAfterFee;
+      if (estimatedUsdcFromBidWall > bidWallUsdcBalance) {
+        console.log(`   ⚠️  Bid wall insufficient balance!`);
+        console.log(`      Need: $${estimatedUsdcFromBidWall.toFixed(2)} USDC`);
+        console.log(`      Have: $${bidWallUsdcBalance.toFixed(2)} USDC`);
+        
+        // Calculate max trade size based on available balance
+        const maxTokens = bidWallUsdcBalance / opportunity.bidWallPriceAfterFee;
+        const maxUsdcInput = maxTokens * opportunity.spotPriceUsdc;
+        console.log(`      Max trade: ~$${maxUsdcInput.toFixed(2)} USDC input`);
+        
+        return {
+          success: false,
+          inputAmount: this.config.tradeSizeUsdc.toString(),
+          outputAmount: "0",
+          error: `Bid wall insufficient: need $${estimatedUsdcFromBidWall.toFixed(2)}, have $${bidWallUsdcBalance.toFixed(2)}`,
+        };
+      }
+
+      if (!jupiterOrder.transaction) {
+        return {
+          success: false,
+          inputAmount: this.config.tradeSizeUsdc.toString(),
+          outputAmount: "0",
+          error: "Jupiter transaction not found",
+        };
+      }
+
+      // Step 2: Build atomic transaction with Jupiter swap + Bid Wall sell
+      console.log("   🔧 Building atomic transaction...");
+
+      // Decode Jupiter transaction
+      const jupiterTx = VersionedTransaction.deserialize(
+        Buffer.from(jupiterOrder.transaction, "base64")
+      );
 
       // Create bid wall sell instruction
       const sellIx = await this.bidWallService.createSellTokensInstruction({
@@ -337,6 +399,24 @@ export class BidWallArbitrageBot {
     opportunity: ArbitrageOpportunity
   ): Promise<TradeResult> {
     try {
+      // Check bid wall balance first
+      const bidWallAccount = await this.bidWallService.fetchBidWall(
+        opportunity.bidWallConfig.bidWallAddress
+      );
+
+      if (!bidWallAccount) {
+        console.log("   ❌ Could not fetch bid wall account");
+        return {
+          success: false,
+          inputAmount: this.config.tradeSizeUsdc.toString(),
+          outputAmount: "0",
+          error: "Bid wall account not found",
+        };
+      }
+
+      const bidWallUsdcBalance = bidWallAccount.quoteAmount.toNumber() / 1_000_000;
+      console.log(`   🏦 Bid Wall Balance: $${bidWallUsdcBalance.toFixed(2)} USDC`);
+
       // Get Jupiter quote
       const quote = await this.jupiterClient.getSwapQuote({
         inputMint: USDC_MINT,
@@ -349,6 +429,25 @@ export class BidWallArbitrageBot {
         tokensReceived * opportunity.bidWallPriceAfterFee;
       const profit =
         estimatedUsdcFromBidWall - this.config.tradeSizeUsdc / 1_000_000;
+
+      // Check if bid wall has enough USDC
+      if (estimatedUsdcFromBidWall > bidWallUsdcBalance) {
+        console.log(`   ⚠️  Bid wall insufficient balance!`);
+        console.log(`      Need: $${estimatedUsdcFromBidWall.toFixed(2)} USDC`);
+        console.log(`      Have: $${bidWallUsdcBalance.toFixed(2)} USDC`);
+        
+        // Calculate max trade size based on available balance
+        const maxTokens = bidWallUsdcBalance / opportunity.bidWallPriceAfterFee;
+        const maxUsdcInput = maxTokens * opportunity.spotPriceUsdc;
+        console.log(`      Max trade: ~$${maxUsdcInput.toFixed(2)} USDC input`);
+        
+        return {
+          success: false,
+          inputAmount: this.config.tradeSizeUsdc.toString(),
+          outputAmount: "0",
+          error: `Bid wall insufficient: need $${estimatedUsdcFromBidWall.toFixed(2)}, have $${bidWallUsdcBalance.toFixed(2)}`,
+        };
+      }
 
       console.log(`   📊 Simulation Results:`);
       console.log(
